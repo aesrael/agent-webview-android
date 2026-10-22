@@ -1,0 +1,6 @@
+{
+  "name": "agent-webview-js-test",
+  "private": true,
+  "scripts": { "test": "node test.js" },
+  "devDependencies": { "jsdom": "24.1.3" }
+}

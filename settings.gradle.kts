@@ -13,4 +13,5 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "agent-webview"
+include(":agent-core")
 include(":agent-webview")
