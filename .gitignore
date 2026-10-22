@@ -1,7 +1,9 @@
-local.properties
-.gradle/
-build/
-*/build/
-.idea/
 *.iml
+*/build/
 .DS_Store
+.gradle/
+.idea/
+build/
+local.properties
+node_modules/
+package-lock.json
