@@ -145,8 +145,16 @@ object SnapshotText {
         for (f in s.frames.filter { it.crossOrigin }) {
             lines += "note: cross-origin frame not readable (${f.src.take(80)})"
         }
+        val origin = ORIGIN.find(s.url)?.value ?: ""
+        var lastText = ""
         fun walk(n: SnapNode, depth: Int) {
-            lines += "  ".repeat(depth) + line(n)
+            // Token savers, no capability lost: separator-only text ("|", "·")
+            // and immediately repeated text carry nothing the model can use.
+            if (n.role == "text") {
+                if (n.name.none { it.isLetterOrDigit() } || n.name == lastText) return
+                lastText = n.name
+            } else lastText = ""
+            lines += "  ".repeat(depth) + line(n, origin)
             n.children.forEach { walk(it, depth + 1) }
         }
         s.nodes.forEach { walk(it, 0) }
@@ -154,7 +162,16 @@ object SnapshotText {
         return clip(lines, maxChars)
     }
 
-    private fun line(n: SnapNode): String {
+    private val ORIGIN = Regex("^https?://[^/?#]+")
+
+    /** Same-origin links print as paths; bare `#` and javascript: links print nothing. */
+    private fun shortHref(href: String, origin: String): String? = when {
+        href == "#" || href.startsWith("javascript:", ignoreCase = true) -> null
+        origin.isNotEmpty() && href.startsWith(origin) -> href.removePrefix(origin).ifEmpty { "/" }
+        else -> href
+    }
+
+    private fun line(n: SnapNode, origin: String = ""): String {
         if (n.role == "text") return "\"${n.name}\""
         val sb = StringBuilder()
         if (n.isInteractive) sb.append('[').append(n.ref).append("] ")
@@ -162,7 +179,7 @@ object SnapshotText {
         if (n.level != null) sb.append('(').append(n.level).append(')')
         if (n.name.isNotEmpty()) sb.append(" \"").append(n.name).append('"')
         if (n.value != null) sb.append(" value=\"").append(n.value).append('"')
-        if (n.href != null) sb.append(" href=").append(n.href)
+        n.href?.let { h -> shortHref(h, origin)?.let { sb.append(" href=").append(it) } }
         if (n.options.isNotEmpty()) sb.append(" options=").append(n.options.joinToString("|", "[", "]"))
         if (n.states.isNotEmpty()) sb.append(" {").append(n.states.sorted().joinToString(",")).append('}')
         return sb.toString()
