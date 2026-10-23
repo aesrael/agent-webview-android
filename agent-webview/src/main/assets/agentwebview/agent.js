@@ -483,19 +483,33 @@ function () {
   API.ensureMonitor = function () {
     var w = window;
     if (w.__awm) return w.__awm;
-    var m = {pending: 0, last: Date.now()};
+    // starts: id -> start time of each request still in flight. Requests older than LONG_MS are
+    // treated as long-lived (long-poll, streaming, analytics beacons) and do not hold up settling.
+    var m = {pending: 0, last: Date.now(), starts: {}, n: 0};
     try { Object.defineProperty(w, '__awm', {value: m, enumerable: false, configurable: true}); } catch (e) { w.__awm = m; }
     try {
-      new MutationObserver(function () { m.last = Date.now(); })
-        .observe(document, {subtree: true, childList: true, attributes: true, characterData: true});
+      new MutationObserver(function (recs) {
+        // Spinners and hover effects flip style/class forever; they say nothing about content settling.
+        for (var i = 0; i < recs.length; i++) {
+          var r = recs[i];
+          if (r.type === 'attributes' && (r.attributeName === 'style' || r.attributeName === 'class')) continue;
+          m.last = Date.now();
+          return;
+        }
+      }).observe(document, {subtree: true, childList: true, attributes: true, characterData: true});
     } catch (e) { /* no document yet */ }
+    function begin() { var id = ++m.n; m.starts[id] = Date.now(); m.pending++; m.last = Date.now(); return id; }
+    function end(id) {
+      if (m.starts[id] !== undefined) { delete m.starts[id]; m.pending = Math.max(0, m.pending - 1); }
+      m.last = Date.now();
+    }
     var of = w.fetch;
     if (typeof of === 'function') {
       w.fetch = function () {
-        m.pending++; m.last = Date.now();
+        var id = begin();
         var p;
-        try { p = of.apply(this, arguments); } catch (e) { m.pending = Math.max(0, m.pending - 1); throw e; }
-        var done = function () { m.pending = Math.max(0, m.pending - 1); m.last = Date.now(); };
+        try { p = of.apply(this, arguments); } catch (e) { end(id); throw e; }
+        var done = function () { end(id); };
         p.then(done, done);
         return p;
       };
@@ -504,22 +518,26 @@ function () {
     var xs = proto && proto.send;
     if (xs) {
       proto.send = function () {
-        m.pending++; m.last = Date.now();
-        this.addEventListener('loadend', function () { m.pending = Math.max(0, m.pending - 1); m.last = Date.now(); });
+        var id = begin();
+        this.addEventListener('loadend', function () { end(id); });
         return xs.apply(this, arguments);
       };
     }
     return m;
   };
 
+  var LONG_MS = 1500;
+
   API.sample = function () {
     var fresh = !window.__awm;
     var m = API.ensureMonitor();
+    var now = Date.now(), young = 0;
+    for (var k in m.starts) { if (now - m.starts[k] < LONG_MS) young++; }
     return {
       readyState: document.readyState,
-      pending: m.pending,
+      pending: young,
       // First sample on this page: we only just started watching, so assume activity just happened.
-      sinceMutation: fresh ? 0 : Date.now() - m.last,
+      sinceMutation: fresh ? 0 : now - m.last,
       url: location.href
     };
   };

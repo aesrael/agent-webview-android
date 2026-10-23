@@ -74,7 +74,7 @@ object CommandGate {
             SessionState.WAITING_FOR_HUMAN -> when (kind) {
                 // Observing or screenshotting while a person types would expose what they enter.
                 CommandKind.REQUEST_HANDOFF, CommandKind.RESUME, CommandKind.AWAIT_RESUME -> null
-                else -> AgentError(ErrorCode.HANDOFF_ACTIVE, "a human has control; wait for resume")
+                else -> AgentError(ErrorCode.HANDOFF_ACTIVE, "a human has control (CAPTCHA, login or take-over); call await_handoff until it returns, then observe")
             }
             SessionState.BLOCKED -> when {
                 kind == CommandKind.ANSWER_DIALOG || kind == CommandKind.REQUEST_HANDOFF ||

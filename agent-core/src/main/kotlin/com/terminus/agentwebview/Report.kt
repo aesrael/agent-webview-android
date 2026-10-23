@@ -73,6 +73,8 @@ data class Observation(
     val pendingDialog: DialogInfo?,
     val lastEventSeq: Long,
     val refGeneration: Int,
+    /** Heuristic alerts, e.g. text that looks like instructions aimed at an AI. */
+    val warnings: List<String> = emptyList(),
 ) {
     fun toWire(includeNodes: Boolean = false): Map<String, Any?> {
         val m = LinkedHashMap<String, Any?>()
@@ -81,6 +83,7 @@ data class Observation(
         m["text"] = text
         m["state"] = state.name
         m["truncated"] = snapshot.truncated
+        m["warnings"] = warnings
         m["signals"] = signals.map { mapOf("kind" to it.kind.name, "reason" to it.reason) }
         m["handoff"] = handoff?.toWire()
         m["pendingDialog"] = pendingDialog?.toWire()

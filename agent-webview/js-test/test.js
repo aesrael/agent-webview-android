@@ -166,4 +166,38 @@ test('malformed refs are stale, not exceptions', () => {
   }
 });
 
-console.log(`\n${passed} passed`);
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+(async () => {
+  async function atest(name, fn) {
+    try { await fn(); passed++; console.log('ok   ' + name); }
+    catch (e) { console.error('FAIL ' + name + '\n' + e.stack); process.exitCode = 1; }
+  }
+
+  await atest('style and class churn does not keep the page "busy"; real content changes do', async () => {
+    const { dom, api, doc } = page('<body><div id="x">a</div></body>');
+    api.sample();
+    await wait(60);
+    const before = api.sample().sinceMutation;
+    assert.ok(before >= 50, 'quiet before: ' + before);
+    doc.getElementById('x').setAttribute('style', 'opacity:0.5');
+    doc.getElementById('x').className = 'spin';
+    await wait(5);
+    assert.ok(api.sample().sinceMutation >= before, 'style/class must not reset the quiet timer');
+    doc.getElementById('x').appendChild(doc.createElement('span'));
+    await wait(5);
+    assert.ok(api.sample().sinceMutation < 40, 'a child added resets it');
+  });
+
+  await atest('requests in flight longer than 1.5s stop counting as pending', async () => {
+    const { dom, api } = page('<body></body>');
+    api.sample();
+    const m = dom.window.__awm;
+    m.starts[900] = Date.now() - 5000; m.pending = 1; // a long-poll
+    assert.strictEqual(api.sample().pending, 0);
+    m.starts[901] = Date.now(); m.pending = 2; // a fresh request
+    assert.strictEqual(api.sample().pending, 1);
+  });
+
+  console.log(`\n${passed} passed`);
+})();
