@@ -24,6 +24,12 @@ enum class ErrorCode {
     EVAL_DISABLED,
     /** A sensitive action was not confirmed by the person. */
     CONFIRMATION_DENIED,
+    /** A secret may not be typed into this origin (or frame). */
+    SECRET_ORIGIN_MISMATCH,
+    /** The session's action budget or rate limit is used up. */
+    LIMIT_EXCEEDED,
+    /** The page is on a human-only site; its content is withheld from the agent. */
+    WITHHELD,
     SESSION_CLOSED,
     UNKNOWN_SECRET,
     PROTOCOL,

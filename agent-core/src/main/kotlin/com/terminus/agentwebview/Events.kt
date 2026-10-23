@@ -101,9 +101,16 @@ sealed class TabEvent(val type: String) {
     }
 
     // ---- agent activity
-    data class ActionStarted(val actionId: Long, val actionType: String) : TabEvent("action_started") {
-        override fun data() = mapOf("actionId" to actionId, "actionType" to actionType)
-        override fun describe() = "started $actionType"
+    /** [label] is a short human sentence for UIs ("Click “Search”"); it never contains typed text. */
+    data class ActionStarted(val actionId: Long, val actionType: String, val label: String = actionType) : TabEvent("action_started") {
+        override fun data() = mapOf("actionId" to actionId, "actionType" to actionType, "label" to label)
+        override fun describe() = "started $label"
+    }
+
+    /** A line the agent wants the person to see ("Comparing prices for 10-17 April"). */
+    data class AgentNote(val text: String) : TabEvent("agent_note") {
+        override fun data() = mapOf("text" to text)
+        override fun describe() = "note: $text"
     }
 
     data class ActionFinished(val actionId: Long, val status: String, val summary: String) : TabEvent("action_finished") {

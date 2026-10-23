@@ -58,6 +58,8 @@ class WebViewDriver(
     private val webView: WebView,
     /** Console levels forwarded to the agent as events (page errors are often the reason an action did nothing). */
     private val consoleEventLevels: Set<String> = setOf("error", "warn"),
+    /** Refuse requests to names that resolve to private addresses (DNS rebinding). On by default. */
+    private val resolveCheck: Boolean = true,
 ) : BrowserDriver {
 
     private val main = Handler(Looper.getMainLooper())
@@ -88,6 +90,13 @@ class WebViewDriver(
             webView.settings.allowFileAccess = false
             webView.settings.allowContentAccess = false
             webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            // Nothing a page can do with the file system, the person's location or autofill is wanted here.
+            @Suppress("DEPRECATION") run {
+                webView.settings.allowFileAccessFromFileURLs = false
+                webView.settings.allowUniversalAccessFromFileURLs = false
+                webView.settings.saveFormData = false
+            }
+            webView.settings.setGeolocationEnabled(false)
             webView.webViewClient = client
             webView.webChromeClient = chrome
             webView.setDownloadListener { url, _, _, mime, length ->
@@ -99,6 +108,27 @@ class WebViewDriver(
     }
 
     private fun emit(e: TabEvent) { listener?.onEvent(e) }
+
+    // DNS rebinding guard: a public-looking name whose A/AAAA record points at the LAN or loopback is refused.
+    // Answers are cached briefly so pages with many requests to one host pay for one lookup. This is a
+    // best-effort check (the WebView resolves again itself), aimed at static "name -> 192.168.x.x" records.
+    private val dnsCache = object : LinkedHashMap<String, Pair<Long, Boolean>>(64, 0.75f, true) {
+        override fun removeEldestEntry(e: MutableMap.MutableEntry<String, Pair<Long, Boolean>>?) = size > 256
+    }
+
+    private fun resolvesToPrivate(host: String?): Boolean {
+        if (host.isNullOrEmpty() || !resolveCheck) return false
+        // IP literals were already judged by the navigation policy.
+        if (host.contains(':') || host.all { it.isDigit() || it == '.' }) return false
+        val now = SystemClock.elapsedRealtime()
+        synchronized(dnsCache) { dnsCache[host]?.let { (t, bad) -> if (now - t < DNS_TTL_MS) return bad } }
+        val bad = try {
+            java.net.InetAddress.getAllByName(host).any { Hosts.privateAddressReason(it.address) != null }
+        } catch (_: Exception) { false } // unresolvable: let the WebView report the load error itself
+        synchronized(dnsCache) { dnsCache[host] = now to bad }
+        if (bad) emit(TabEvent.NavigationBlocked(host, ErrorCode.NAV_BLOCKED, "host resolves to a private address"))
+        return bad
+    }
 
     // ---------------------------------------------------------------- clients
 
@@ -112,7 +142,7 @@ class WebViewDriver(
             val url = request.url.toString()
             val scheme = request.url.scheme
             if (scheme != "http" && scheme != "https") return null
-            val ok = listener?.allowNavigation(url, request.isForMainFrame) ?: true
+            val ok = (listener?.allowNavigation(url, request.isForMainFrame) ?: true) && !resolvesToPrivate(request.url.host)
             return if (ok) null else WebResourceResponse(
                 "text/plain", "utf-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(ByteArray(0)),
             )
@@ -515,5 +545,6 @@ class WebViewDriver(
 
     companion object {
         const val ASSET = "agentwebview/agent.js"
+        private const val DNS_TTL_MS = 60_000L
     }
 }

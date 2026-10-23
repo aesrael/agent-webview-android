@@ -57,6 +57,7 @@ class FakeDriver : BrowserDriver {
     var probeCalls = 0
     var present: Set<String> = emptySet()
     var screenshotCalls = 0
+    var frameOrigin: String? = null
     private var counter = 1
 
     override fun attach(listener: DriverListener) { this.listener = listener }
@@ -109,6 +110,8 @@ class FakeDriver : BrowserDriver {
         probeCalls++
         return ProbeResult(currentUrl, selectors.filter { it in present }.toSet())
     }
+
+    override suspend fun originOf(ref: String): String? = frameOrigin
 
     override suspend fun answerDialog(accept: Boolean, text: String?): Boolean {
         if (!dialogOpen) return false

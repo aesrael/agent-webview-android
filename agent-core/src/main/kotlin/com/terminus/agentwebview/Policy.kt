@@ -53,11 +53,13 @@ data class NavigationPolicy(
      * able to poke at the user's LAN.
      */
     fun checkSubresource(url: String): Decision {
-        if (!blockPrivateNetworks) return ALLOW
         val parsed = parse(url) ?: return ALLOW // data:, blob:, etc. are not network reachability
         if (parsed.scheme != "http" && parsed.scheme != "https") return ALLOW
         val host = parsed.host ?: return deny("URL has no host")
-        privateReason(host)?.let { return deny(it) }
+        if (blockPrivateNetworks) privateReason(host)?.let { return deny(it) }
+        // A denied host stays denied for every request the page makes, not just top-level loads:
+        // otherwise a page could still send requests (with cookies) to the app's own server.
+        if (denyHosts.any { matches(it, host) }) return deny("host '$host' is denied")
         return ALLOW
     }
 
@@ -111,6 +113,16 @@ object Hosts {
         if (h == "localhost" || PRIVATE_SUFFIXES.any { h.endsWith(it) }) return "local hostname"
         if (!h.contains('.') && !allowSingleLabel) return "single-label (intranet) hostname"
         return null
+    }
+
+    /** For DNS answers: why this resolved address is not public, or null. [bytes] is 4 or 16 long. */
+    fun privateAddressReason(bytes: ByteArray): String? = when (bytes.size) {
+        4 -> {
+            val v = bytes.fold(0L) { acc, b -> (acc shl 8) or (b.toLong() and 0xFF) }
+            if (isPrivateV4(v)) "resolves to a private or reserved IPv4 address" else null
+        }
+        16 -> if (isPrivateV6(bytes)) "resolves to a private or reserved IPv6 address" else null
+        else -> "unrecognised address"
     }
 
     private fun isNumericLabel(s: String) =

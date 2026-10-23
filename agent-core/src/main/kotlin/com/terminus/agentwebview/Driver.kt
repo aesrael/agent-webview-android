@@ -80,6 +80,12 @@ interface BrowserDriver {
      */
     suspend fun probe(selectors: List<String>): ProbeResult
 
+    /**
+     * Origin of the document that contains the element for [ref] (differs from the top page for
+     * iframes). null = unknown. Used to refuse typing a secret into a foreign frame.
+     */
+    suspend fun originOf(ref: String): String? = null
+
     /** Answers the open dialog. Returns false if none was open. */
     suspend fun answerDialog(accept: Boolean, text: String?): Boolean
 

@@ -89,13 +89,13 @@ class CoreStateTest {
 
     @Test fun `secret vault substitutes and redacts`() {
         val v = SecretVault()
-        v.put("pw", "hunter2!"); v.put("short", "ab")
-        assertEquals("pass=hunter2!", v.substitute("pass=<secret:pw>"))
-        assertEquals("no placeholders", v.substitute("no placeholders"))
-        try { v.substitute("<secret:nope>"); fail() } catch (e: AgentException) { assertEquals(ErrorCode.UNKNOWN_SECRET, e.error.code) }
+        v.putForAnyOrigin("pw", "hunter2!"); v.putForAnyOrigin("short", "ab")
+        assertEquals("pass=hunter2!", v.substitute("pass=<secret:pw>", "https://a.test"))
+        assertEquals("no placeholders", v.substitute("no placeholders", null))
+        try { v.substitute("<secret:nope>", null); fail() } catch (e: AgentException) { assertEquals(ErrorCode.UNKNOWN_SECRET, e.error.code) }
         assertEquals("typed <secret:pw> ok", v.redact("typed hunter2! ok"))
         assertEquals("ab stays", v.redact("ab stays")) // too short to redact safely
-        try { v.put("bad name", "x"); fail() } catch (_: IllegalArgumentException) { }
+        try { v.putForAnyOrigin("bad name", "x"); fail() } catch (_: IllegalArgumentException) { }
         v.remove("pw"); assertEquals(setOf("short"), v.names())
     }
 

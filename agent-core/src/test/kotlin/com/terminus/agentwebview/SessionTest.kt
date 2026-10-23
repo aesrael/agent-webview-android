@@ -95,7 +95,7 @@ class SessionTest {
 
     @Test fun `secrets are substituted for the page and redacted everywhere else`() = runBlocking {
         val (s, d) = rig { it.snapshotNodes = listOf(SnapNode("textbox", "Password", "@e1", value = "hunter2!")) }
-        s.vault.put("pw", "hunter2!")
+        s.vault.putForAnyOrigin("pw", "hunter2!")
         s.observe()
         val r = s.act(AgentAction.Fill("@e1", "<secret:pw>"))
         assertEquals("hunter2!", (d.performed.single() as AgentAction.Fill).text) // page gets the real value
