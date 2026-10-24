@@ -146,28 +146,34 @@ object SnapshotText {
             lines += "note: cross-origin frame not readable (${f.src.take(80)})"
         }
         val origin = ORIGIN.find(s.url)?.value ?: ""
-        var lastText = ""
-        fun walk(n: SnapNode, depth: Int) {
-            // Token savers, no capability lost: separator-only text ("|", "·")
-            // and immediately repeated text carry nothing the model can use.
+        fun walk(n: SnapNode, depth: Int, parentName: String) {
+            // Token savers: separator-only text ("|", "·") and text that only repeats its
+            // parent's accessible name (link "Home" -> text "Home") carry nothing new.
+            // Sibling repeats are kept: equal table cells or scores are data.
             if (n.role == "text") {
-                if (n.name.none { it.isLetterOrDigit() } || n.name == lastText) return
-                lastText = n.name
-            } else lastText = ""
+                if (n.name.all { it.isWhitespace() || it in SEPARATORS } || n.name == parentName) return
+            }
             lines += "  ".repeat(depth) + line(n, origin)
-            n.children.forEach { walk(it, depth + 1) }
+            n.children.forEach { walk(it, depth + 1, n.name) }
         }
-        s.nodes.forEach { walk(it, 0) }
+        s.nodes.forEach { walk(it, 0, "") }
         if (s.truncated) lines += "… page truncated; scroll or narrow down to see more"
         return clip(lines, maxChars)
     }
 
     private val ORIGIN = Regex("^https?://[^/?#]+")
+    private const val SEPARATORS = "|·•/\\-–—,;:"
+
+    /** True when [href] is on [origin]: same prefix AND the origin ends there, so
+     *  https://a.com.evil.com/x is NOT same-origin with https://a.com. */
+    internal fun sameOrigin(href: String, origin: String): Boolean =
+        origin.isNotEmpty() && href.startsWith(origin) &&
+            (href.length == origin.length || href[origin.length] in "/?#")
 
     /** Same-origin links print as paths; bare `#` and javascript: links print nothing. */
     private fun shortHref(href: String, origin: String): String? = when {
         href == "#" || href.startsWith("javascript:", ignoreCase = true) -> null
-        origin.isNotEmpty() && href.startsWith(origin) -> href.removePrefix(origin).ifEmpty { "/" }
+        sameOrigin(href, origin) -> href.removePrefix(origin).ifEmpty { "/" }
         else -> href
     }
 
