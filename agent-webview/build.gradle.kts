@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.terminus.agentwebview"
+    namespace = "dev.agentwebview"
     compileSdk = 34
 
     defaultConfig {
