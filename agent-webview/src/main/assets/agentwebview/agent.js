@@ -71,6 +71,18 @@ function () {
     return false;
   }
 
+  /** Screen-reader-only content (sr-only / visually-hidden): present for assistive tech, invisible on screen.
+   *  Its text ("Posted", "Attribution") is noise for an agent reading what a person sees. */
+  function isVisuallyHidden(el) {
+    var win = el.ownerDocument.defaultView || window;
+    var cs;
+    try { cs = win.getComputedStyle(el); } catch (e) { return false; }
+    if (cs.clip === 'rect(0px, 0px, 0px, 0px)' || cs.clipPath === 'inset(50%)') return true;
+    if (cs.position !== 'absolute' && cs.position !== 'fixed') return false;
+    var r = el.getBoundingClientRect();
+    return r.width <= 1 && r.height <= 1 && cs.overflow === 'hidden';
+  }
+
   function roleOf(el) {
     var explicit = (el.getAttribute('role') || '').trim().split(/\s+/)[0];
     var tag = el.localName;
@@ -156,7 +168,11 @@ function () {
     var maxName = opts.maxNameChars || 120;
     var requireLayout = opts.requireLayout !== false;
 
-    deepAll('[' + REF + ']').forEach(function (e) { e.removeAttribute(REF); });
+    // Stable refs: an element keeps the ref it was given until it leaves the page, so a ref from an earlier
+    // observe still works after a re-observe. New elements get fresh numbers (never reused); stamps on
+    // elements this pass does not list are removed below, so they fail as STALE_REF instead of acting.
+    var stamped = deepAll('[' + REF + ']');
+    var used = {};
 
     var n = startAt || 1;
     var count = 0, textChars = 0, truncated = false;
@@ -219,12 +235,22 @@ function () {
       if (role === 'heading') {
         var lvl = /^h[1-6]$/.test(tag) ? parseInt(tag.charAt(1), 10) : parseInt(el.getAttribute('aria-level') || '2', 10);
         var hname = clip(el.innerText || el.textContent, maxName);
-        if (hname) { count++; kids.push({role: 'heading', name: hname, level: lvl, children: []}); }
+        if (hname) {
+          count++;
+          var hnode = {role: 'heading', name: hname, level: lvl, children: []};
+          kids.push(hnode);
+          // Headline links (<h3><a href>) are the main way into articles and search results: keep them.
+          walkInteractiveOnly(el, hnode.children);
+        }
         return;
       }
 
+      if (!interactive && requireLayout && !LANDMARK[tag] && isVisuallyHidden(el)) return;
+
       if (interactive) {
-        var ref = '@e' + (n++);
+        var prev = el.getAttribute(REF);
+        var ref = (prev && /^@e\d+$/.test(prev) && !used[prev]) ? prev : '@e' + (n++);
+        used[ref] = 1;
         el.setAttribute(REF, ref);
         count++;
         var states = [];
@@ -284,7 +310,18 @@ function () {
     }
 
     var out = [];
-    walkChildren(document.body || document.documentElement, out);
+    if (opts.focus) {
+      // find: only the marked match blocks. A partial pass must not clear refs elsewhere on the page.
+      deepAll('[' + FOCUS + ']').forEach(function (b, i) {
+        var mk = [];
+        walk(b, mk);
+        if (mk.length) { count++; out.push({role: 'group', name: 'match ' + (i + 1), children: mk}); }
+        b.removeAttribute(FOCUS);
+      });
+    } else {
+      walkChildren(document.body || document.documentElement, out);
+      stamped.forEach(function (e) { var r = e.getAttribute(REF); if (r && !(used[r] && seen.has(e))) e.removeAttribute(REF); });
+    }
 
     return {
       url: location.href,
@@ -297,6 +334,108 @@ function () {
       frames: frames,
       nextIndex: n
     };
+  };
+
+  // ---------------------------------------------------------------- find & extract (read-only)
+
+  var FOCUS = 'data-agent-focus';
+
+  /** The readable unit around a match: a result card, list item or row, never the whole page. */
+  function blockOf(el) {
+    var best = el, c = el;
+    for (var i = 0; i < 6 && c && c !== document.body; i++) {
+      if (c.matches && c.matches('li,article,tr,dd,form,dialog,[role=listitem],[role=article],[role=row],[role=dialog]')) return c;
+      if ((c.innerText || '').length > 800) break;
+      best = c;
+      c = c.parentElement;
+    }
+    return best;
+  }
+
+  API.find = function (q, startAt, opts) {
+    q = String(q || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!q) return fail('BAD_ACTION', 'empty query');
+    deepAll('[' + FOCUS + ']').forEach(function (e) { e.removeAttribute(FOCUS); });
+    var blocks = [], more = false;
+    function consider(el) {
+      if (!el || SKIP[el.localName] || isHidden(el, true)) return;
+      var b = blockOf(el);
+      if (blocks.indexOf(b) >= 0) return;
+      for (var k = 0; k < blocks.length; k++) if (blocks[k].contains(b)) return;
+      if (blocks.length >= 10) { more = true; return; }
+      blocks.push(b);
+    }
+    var tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    var t;
+    while ((t = tw.nextNode())) {
+      if (t.data.replace(/\s+/g, ' ').toLowerCase().indexOf(q) >= 0) consider(t.parentElement);
+      if (more) break;
+    }
+    // Text split across tags ("Add to <b>basket</b>") and labelled controls ("aria-label", placeholder).
+    if (!more) {
+      var els = document.body.querySelectorAll('a,button,label,[role=button],[aria-label],input[placeholder],h1,h2,h3,h4,li,td');
+      for (var i = 0; i < els.length && !more; i++) {
+        var e = els[i];
+        var hay = ((e.getAttribute('aria-label') || '') + ' ' + (e.getAttribute('placeholder') || '') + ' ' + (e.innerText || '')).replace(/\s+/g, ' ').toLowerCase();
+        if (hay.indexOf(q) >= 0) {
+          var inner = false;
+          for (var j = 0; j < blocks.length; j++) if (blocks[j].contains(e)) { inner = true; break; }
+          if (!inner) consider(e);
+        }
+      }
+    }
+    blocks.forEach(function (b, i) { b.setAttribute(FOCUS, String(i)); });
+    if (blocks[0]) { try { blocks[0].scrollIntoView({block: 'center', behavior: 'instant'}); } catch (e) { blocks[0].scrollIntoView(); } }
+    var snippets = blocks.map(function (b) { return clip(b.innerText || b.textContent, 300); });
+    var o = {};
+    for (var key in (opts || {})) o[key] = opts[key];
+    o.focus = true;
+    return {ok: true, count: blocks.length, more: more, snippets: snippets, snapshot: API.snapshot(startAt, o)};
+  };
+
+  API.extract = function (what, maxChars) {
+    maxChars = maxChars || 20000;
+    var out = [];
+    var used = 0;
+    function add(line) {
+      if (used >= maxChars) return false;
+      line = line.slice(0, maxChars - used);
+      out.push(line); used += line.length + 1;
+      return true;
+    }
+    if (what === 'tables') {
+      var tables = deepAll('table,[role=table],[role=grid]');
+      tables.forEach(function (tb, ti) {
+        if (isHidden(tb, true)) return;
+        var cap = tb.querySelector('caption');
+        add('## table ' + (ti + 1) + (cap ? ': ' + clip(cap.innerText, 120) : ''));
+        var rows = tb.querySelectorAll('tr,[role=row]');
+        for (var r = 0; r < rows.length; r++) {
+          var cells = rows[r].querySelectorAll('th,td,[role=cell],[role=columnheader],[role=rowheader],[role=gridcell]');
+          var vals = [];
+          for (var c = 0; c < cells.length; c++) vals.push(clip(cells[c].innerText || cells[c].textContent, 200));
+          if (vals.join('').trim() && !add(vals.join(' | '))) break;
+        }
+      });
+      if (!out.length) add('(no tables on this page)');
+    } else if (what === 'links') {
+      var seenHref = {};
+      var links = deepAll('a[href]');
+      for (var i = 0; i < links.length; i++) {
+        var a = links[i];
+        if (isHidden(a, true) || /^javascript:/i.test(a.getAttribute('href') || '')) continue;
+        var href = a.href;
+        if (seenHref[href]) continue;
+        seenHref[href] = 1;
+        var name = clip(labelText(a) || a.innerText || a.getAttribute('title') || '', 120);
+        if (!add((name || '(no text)') + ' — ' + clip(href, 200))) break;
+      }
+    } else {
+      add(((document.body || document.documentElement).innerText || '').replace(/\n{3,}/g, '\n\n'));
+    }
+    var text = out.join('\n');
+    if (used >= maxChars) text += '\n… cut at ' + maxChars + ' characters';
+    return {ok: true, text: text};
   };
 
   // ---------------------------------------------------------------- geometry & actionability
@@ -336,15 +475,34 @@ function () {
     if (top && top !== el && !el.contains(top) && !top.contains(el)) {
       res.covered = true;
       res.coveredBy = (top.localName || '') + (top.id ? '#' + top.id : '');
+      // A dialog or a big overlay (cookie wall, modal backdrop) must be dealt with first; a small
+      // coverer (floating chat bubble, badge, a card's stretched link) is safe to click past.
+      var tr = top.getBoundingClientRect();
+      var vw = window.innerWidth || 1, vh2 = window.innerHeight || 1;
+      var big = (tr.width * tr.height) / (vw * vh2) > 0.4;
+      var modal = !!(top.closest && top.closest('dialog,[role=dialog],[role=alertdialog],[aria-modal=true]'));
+      res.coverBlocking = big || modal;
     }
     return res;
+  };
+
+  /** Effect check around a native tap: any DOM change, request, navigation, focus or scroll since the mark. */
+  API.effectMark = function () {
+    var m = API.ensureMonitor();
+    return {any: m.any || 0, n: m.n, url: location.href, sy: Math.round(window.scrollY), focus: document.activeElement ? document.activeElement.outerHTML.length : 0};
+  };
+  API.effectSince = function (k) {
+    var m = window.__awm;
+    if (!m || !k) return true;
+    var f = document.activeElement ? document.activeElement.outerHTML.length : 0;
+    return (m.any || 0) !== k.any || m.n !== k.n || location.href !== k.url || Math.round(window.scrollY) !== k.sy || f !== k.focus;
   };
 
   /** Fallback click (untrusted) when native touch is unavailable. */
   API.click = function (ref) {
     var l = API.locate(ref);
     if (!l.ok) return l;
-    if (l.covered) return fail('NOT_ACTIONABLE', 'element is covered by <' + l.coveredBy + '>');
+    if (l.covered && l.coverBlocking) return fail('NOT_ACTIONABLE', 'element is covered by <' + l.coveredBy + '> (a dialog or overlay: close it first)');
     var el = find(ref).el;
     try { el.focus({preventScroll: true}); } catch (e) { /* ignore */ }
     el.click();
@@ -489,6 +647,7 @@ function () {
     try { Object.defineProperty(w, '__awm', {value: m, enumerable: false, configurable: true}); } catch (e) { w.__awm = m; }
     try {
       new MutationObserver(function (recs) {
+        m.any = Date.now(); // any change at all, class/style included: did a tap do anything?
         // Spinners and hover effects flip style/class forever; they say nothing about content settling.
         for (var i = 0; i < recs.length; i++) {
           var r = recs[i];

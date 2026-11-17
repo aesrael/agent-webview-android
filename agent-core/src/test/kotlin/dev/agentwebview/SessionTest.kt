@@ -62,15 +62,36 @@ class SessionTest {
         assertTrue(s.act(AgentAction.Click("@e2")).ok)
     }
 
-    @Test fun `driver reporting a missing element invalidates refs`() = runBlocking {
+    @Test fun `one missing element fails alone and keeps the other refs`() = runBlocking {
         val (s, d) = rig {
-            it.snapshotNodes = listOf(btn("A"))
-            it.performResult = { DriverResult.Failed(ErrorCode.STALE_REF, "gone") }
+            it.snapshotNodes = listOf(btn("A"), btn("B"))
+            it.performResult = { a -> if (a is AgentAction.Click && a.ref == "@e1") DriverResult.Failed(ErrorCode.STALE_REF, "gone") else DriverResult.Ok }
         }
         s.observe()
         val r = s.act(AgentAction.Click("@e1"))
-        assertEquals(ActionStatus.FAILED, r.status); assertTrue(r.refsInvalidated)
+        assertEquals(ActionStatus.FAILED, r.status)
+        assertEquals(ErrorCode.STALE_REF, r.error?.code)
+        assertFalse(r.refsInvalidated) // refs are stable per element: one stale one must not kill the rest
+        assertTrue(s.act(AgentAction.Click("@e2")).ok)
+    }
+
+    @Test fun `an ambiguous ref still resets every ref`() = runBlocking {
+        val (s, d) = rig {
+            it.snapshotNodes = listOf(btn("A"))
+            it.performResult = { DriverResult.Failed(ErrorCode.AMBIGUOUS_REF, "two elements") }
+        }
+        s.observe()
+        val r = s.act(AgentAction.Click("@e1"))
+        assertTrue(r.refsInvalidated)
         assertEquals(ErrorCode.STALE_REF, s.act(AgentAction.Click("@e1")).error?.code)
+    }
+
+    @Test fun `find and extract are unsupported on a driver without them`() = runBlocking {
+        val (s, _) = rig()
+        s.open("https://a.test/")
+        assertEquals("PROTOCOL", (runCatching { s.find("x") }.exceptionOrNull() as AgentException).error.code.name)
+        assertEquals("PROTOCOL", (runCatching { s.extract("text", 1000) }.exceptionOrNull() as AgentException).error.code.name)
+        assertEquals("BAD_ACTION", (runCatching { s.extract("nope", 1000) }.exceptionOrNull() as AgentException).error.code.name)
     }
 
     @Test fun `blocked navigation is refused and logged`() = runBlocking {

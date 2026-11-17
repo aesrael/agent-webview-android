@@ -202,6 +202,17 @@ object InjectionHeuristics {
         Regex("<secret:", RegexOption.IGNORE_CASE),
     )
 
+    /** Same patterns over free text (extract output). */
+    fun scanText(text: String): List<String> {
+        val hits = ArrayList<String>()
+        for (p in PATTERNS) {
+            val m = p.find(text) ?: continue
+            hits += text.substring(maxOf(0, m.range.first - 10), minOf(text.length, m.range.last + 30)).trim()
+            if (hits.size >= 3) break
+        }
+        return hits
+    }
+
     /** Up to three short excerpts of suspicious text found in [s]. */
     fun scan(s: PageSnapshot): List<String> {
         val hits = ArrayList<String>()

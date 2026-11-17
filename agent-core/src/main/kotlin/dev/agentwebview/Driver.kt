@@ -27,6 +27,8 @@ class Screenshot(val bytes: ByteArray, val mime: String, val width: Int, val hei
 }
 
 /** Pending JS dialog (alert / confirm / prompt / beforeunload). */
+class FindResult(val count: Int, val more: Boolean, val snippets: List<String>, val snapshot: PageSnapshot)
+
 data class DialogInfo(val kind: String, val message: String, val defaultValue: String?) {
     fun toWire(): Map<String, Any?> = mapOf("kind" to kind, "message" to message, "defaultValue" to defaultValue)
 }
@@ -85,6 +87,12 @@ interface BrowserDriver {
      * iframes). null = unknown. Used to refuse typing a secret into a foreign frame.
      */
     suspend fun originOf(ref: String): String? = null
+
+    /** Read-only: the blocks of the page that contain [query], snapshotted with refs (null = unsupported). */
+    suspend fun find(query: String, startAt: Int, options: SnapshotOptions): FindResult? = null
+
+    /** Read-only: visible page text, tables or links as plain text, beyond the snapshot budget (null = unsupported). */
+    suspend fun extract(what: String, maxChars: Int): String? = null
 
     /** Answers the open dialog. Returns false if none was open. */
     suspend fun answerDialog(accept: Boolean, text: String?): Boolean

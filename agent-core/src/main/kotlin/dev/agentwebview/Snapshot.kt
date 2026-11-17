@@ -60,8 +60,9 @@ class RefTable {
     /** Index the next snapshot must start numbering from. */
     fun nextIndex(): Int = synchronized(lock) { next }
 
-    fun install(snapshot: PageSnapshot): PageSnapshot = synchronized(lock) {
-        val map = HashMap<String, SnapNode>()
+    /** [merge]: a partial snapshot (find) adds its refs to the known set instead of replacing it. */
+    fun install(snapshot: PageSnapshot, merge: Boolean = false): PageSnapshot = synchronized(lock) {
+        val map = if (merge) HashMap(nodes) else HashMap<String, SnapNode>()
         fun walk(n: SnapNode) {
             if (n.isInteractive) map[n.ref] = n
             n.children.forEach(::walk)
@@ -153,7 +154,7 @@ object SnapshotText {
             if (n.role == "text") {
                 if (n.name.all { it.isWhitespace() || it in SEPARATORS } || n.name == parentName) return
             }
-            lines += "  ".repeat(depth) + line(n, origin)
+            lines += "  ".repeat(depth) + line(n, origin, parentName)
             n.children.forEach { walk(it, depth + 1, n.name) }
         }
         s.nodes.forEach { walk(it, 0, "") }
@@ -177,13 +178,14 @@ object SnapshotText {
         else -> href
     }
 
-    private fun line(n: SnapNode, origin: String = ""): String {
+    private fun line(n: SnapNode, origin: String = "", parentName: String = ""): String {
         if (n.role == "text") return "\"${n.name}\""
         val sb = StringBuilder()
         if (n.isInteractive) sb.append('[').append(n.ref).append("] ")
         sb.append(n.role)
         if (n.level != null) sb.append('(').append(n.level).append(')')
-        if (n.name.isNotEmpty()) sb.append(" \"").append(n.name).append('"')
+        // A headline link repeats its heading's text: print the ref and href only.
+        if (n.name.isNotEmpty() && n.name != parentName) sb.append(" \"").append(n.name).append('"')
         if (n.value != null) sb.append(" value=\"").append(n.value).append('"')
         n.href?.let { h -> shortHref(h, origin)?.let { sb.append(" href=").append(it) } }
         if (n.options.isNotEmpty()) sb.append(" options=").append(n.options.joinToString("|", "[", "]"))

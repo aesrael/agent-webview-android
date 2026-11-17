@@ -295,6 +295,28 @@ class WebViewDriver(
         return SnapshotWire.fromValue(v)
     }
 
+    override suspend fun find(query: String, startAt: Int, options: SnapshotOptions): FindResult? {
+        val opts = Json.stringify(
+            mapOf(
+                "maxNodes" to options.maxNodes, "maxTextChars" to options.maxTextChars,
+                "maxNameChars" to options.maxNameChars, "requireLayout" to options.requireLayout,
+            ),
+        )
+        val m = Js.decodeResult(call("find(${Json.stringify(query)}, $startAt, $opts)")) as? Map<*, *> ?: return null
+        if (m.bool("ok") == false) throw AgentException(ErrorCode.BAD_ACTION, m.string("message") ?: "find failed")
+        return FindResult(
+            count = m.int("count") ?: 0,
+            more = m.bool("more") ?: false,
+            snippets = (m.list("snippets") ?: emptyList<Any?>()).mapNotNull { it as? String },
+            snapshot = SnapshotWire.fromValue(m["snapshot"]),
+        )
+    }
+
+    override suspend fun extract(what: String, maxChars: Int): String? {
+        val m = Js.decodeResult(call("extract(${Json.stringify(what)}, $maxChars)")) as? Map<*, *> ?: return null
+        return m.string("text")
+    }
+
     override suspend fun samplePage(): PageSample? {
         val m = Js.decodeResult(call("sample()")) as? Map<*, *> ?: return null
         return PageSample(
@@ -402,8 +424,13 @@ class WebViewDriver(
         if (loc is Located.Fail) return loc.result
         loc as Located.At
         if (loc.covered != null) {
-            return DriverResult.Failed(ErrorCode.NOT_ACTIONABLE, "element is covered by <${loc.covered}>")
+            if (loc.coverBlocking) {
+                return DriverResult.Failed(ErrorCode.NOT_ACTIONABLE, "element is covered by <${loc.covered}> (a dialog or overlay: close it first)")
+            }
+            // A small coverer would swallow the tap: click the element itself.
+            return jsAction("click(${Js.quote(ref)})")
         }
+        val mark = try { call("effectMark()") } catch (_: Throwable) { null }
         val tapped = onMain {
             val px = loc.x * loc.dpr
             val py = loc.y * loc.dpr
@@ -412,12 +439,19 @@ class WebViewDriver(
                 tap(px.toFloat(), py.toFloat()); true
             }
         }
-        if (tapped) return DriverResult.Ok
-        return jsAction("click(${Js.quote(ref)})") // view has no size / point is off-screen
+        if (!tapped) return jsAction("click(${Js.quote(ref)})") // view has no size / point is off-screen
+        // Some pages ignore synthetic touches (handlers on mousedown/pointer quirks). If the tap changed
+        // nothing at all (no DOM change, request, navigation, focus or scroll), click the element directly once.
+        if (mark != null && mark != "null") {
+            delay(TAP_EFFECT_MS)
+            val changed = try { Js.decodeResult(call("effectSince($mark)")) as? Boolean ?: true } catch (_: Throwable) { true }
+            if (!changed) return jsAction("click(${Js.quote(ref)})")
+        }
+        return DriverResult.Ok
     }
 
     private sealed class Located {
-        class At(val x: Double, val y: Double, val dpr: Double, val covered: String?) : Located()
+        class At(val x: Double, val y: Double, val dpr: Double, val covered: String?, val coverBlocking: Boolean = true) : Located()
         class Fail(val result: DriverResult.Failed) : Located()
     }
 
@@ -428,6 +462,7 @@ class WebViewDriver(
         return Located.At(
             m.double("x") ?: 0.0, m.double("y") ?: 0.0, m.double("dpr") ?: 1.0,
             if (m.bool("covered") == true) (m.string("coveredBy") ?: "element") else null,
+            m.bool("coverBlocking") ?: true,
         )
     }
 
@@ -545,6 +580,8 @@ class WebViewDriver(
 
     companion object {
         const val ASSET = "agentwebview/agent.js"
+        /** How long a native tap gets to show any effect before the direct-click fallback. */
+        const val TAP_EFFECT_MS = 400L
         private const val DNS_TTL_MS = 60_000L
     }
 }
